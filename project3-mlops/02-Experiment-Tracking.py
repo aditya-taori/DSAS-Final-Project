@@ -104,6 +104,11 @@ X_train, X_test, y_train, y_test = train_test_split(df.drop(["price"], axis=1), 
 
 # COMMAND ----------
 
+x = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().getOrElse(None)
+x
+
+# COMMAND ----------
+
 import mlflow.sklearn
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error

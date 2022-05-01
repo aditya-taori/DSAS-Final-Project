@@ -32,12 +32,105 @@
 
 -- COMMAND ----------
 
+-- MAGIC %python
+-- MAGIC 
+-- MAGIC blocks_df = spark.sql("select * from ethereumetl.blocks")
+-- MAGIC contracts_df = spark.sql("select * from ethereumetl.contracts")
+-- MAGIC logs_df = spark.sql("select * from ethereumetl.logs")
+-- MAGIC receipts_df = spark.sql("select * from ethereumetl.receipts")
+-- MAGIC token_prices_usd_df = spark.sql("select * from ethereumetl.token_prices_usd")
+-- MAGIC token_transfers_df = spark.sql("select * from ethereumetl.token_transfers")
+-- MAGIC token_df = spark.sql("select * from ethereumetl.tokens")
+-- MAGIC transactions_df = spark.sql("select * from ethereumetl.transactions")
+-- MAGIC 
+-- MAGIC 
+-- MAGIC display(blocks_df.select("*"))
+
+-- COMMAND ----------
+
+--select min(transaction_index),max(transaction_index) from ethereumetl.transactions;
+select count(*) from ethereumetl.transactions;
+
+-- COMMAND ----------
+
+--select count(*) from ethereumetl.tokens;
+--select count(*) from ethereumetl.token_transfers;
+--select count(*) from ethereumetl.token_prices_usd;
+--select count(*) from ethereumetl.receipts;
+--select count(*) from ethereumetl.logs;
+--select count(*) from ethereumetl.contracts;
+select count(*) from ethereumetl.blocks;
+
+-- COMMAND ----------
+
+
+
+-- COMMAND ----------
+
+-- MAGIC %python 
+-- MAGIC 
+-- MAGIC transactions_df.select(min("transaction_index"),max("transaction_index")).show()
+
+-- COMMAND ----------
+
 -- MAGIC %md
 -- MAGIC ## Q: What is the maximum block number and date of block in the database
 
 -- COMMAND ----------
 
 -- TBD
+select number,to_timestamp(timestamp) from ethereumetl.blocks where number= (select max(number) from ethereumetl.blocks);
+
+-- COMMAND ----------
+
+CREATE OR REPLACE VIEW g10_db.blocks_date 
+COMMENT 'View of Blocks with date'
+AS SELECT *,to_timestamp(timestamp) AS creation_date FROM ethereumetl.blocks;
+
+
+-- COMMAND ----------
+
+CREATE OR REPLACE VIEW g10_db.blocks 
+COMMENT 'Copy of Blocks in g10db'
+AS SELECT * FROM ethereumetl.blocks;
+
+CREATE OR REPLACE VIEW g10_db.tokens 
+COMMENT 'Copy of Tokens in g10db'
+AS SELECT * FROM ethereumetl.tokens;
+
+CREATE OR REPLACE VIEW g10_db.token_transfers 
+COMMENT 'Copy of Token Transfers in g10db'
+AS SELECT * FROM ethereumetl.token_transfers;
+
+CREATE OR REPLACE VIEW g10_db.token_prices_usd 
+COMMENT 'Copy of Token Prices USD in g10db'
+AS SELECT * FROM ethereumetl.token_prices_usd;
+
+CREATE OR REPLACE VIEW g10_db.receipts 
+COMMENT 'Copy of Receipts in g10db'
+AS SELECT * FROM ethereumetl.receipts;
+
+CREATE OR REPLACE VIEW g10_db.logs 
+COMMENT 'Copy of Logs in g10db'
+AS SELECT * FROM ethereumetl.logs;
+
+CREATE OR REPLACE VIEW g10_db.contracts 
+COMMENT 'Copy of Contracts in g10db'
+AS SELECT * FROM ethereumetl.contracts;
+
+CREATE OR REPLACE VIEW g10_db.transactions 
+COMMENT 'Copy of Contracts in g10db'
+AS SELECT * FROM ethereumetl.transactions;
+
+-- COMMAND ----------
+
+CREATE OR REPLACE VIEW g10_db.erc20_token_transfers_limit_10000 
+COMMENT 'Copy of ERC 20 token transfers'
+AS select ttr.* from g10_db.token_transfers ttr inner join g10_db.tokens tok on (ttr.token_address=tok.address) limit 10000;
+
+-- COMMAND ----------
+
+select * from g10_db.erc20_token_transfers_limit_10000;
 
 -- COMMAND ----------
 
@@ -47,6 +140,9 @@
 -- COMMAND ----------
 
 -- TBD
+select tr.* from 
+   (select token_address,block_number from g10_db.token_transfers) tr inner join 
+      (select * from g10_db.tokens) tok on (tr.token_address=tok.address) order by block_number;
 
 -- COMMAND ----------
 
@@ -56,6 +152,11 @@
 -- COMMAND ----------
 
 -- TBD
+select tk_prices.* from g10_db.token_prices_usd tk_prices inner join tokens tok on (tk_prices.symbol = tok.symbol);
+
+-- COMMAND ----------
+
+select count(*) from (select distinct tok.symbol from tokens tok) s; 
 
 -- COMMAND ----------
 
@@ -65,6 +166,7 @@
 -- COMMAND ----------
 
 -- TBD
+select count(*) as tran,(select count(*) from g10_db.transactions tr inner join g10_db.contracts con on (tr.to_address = con.address)) as ctc from g10_db.transactions ;  
 
 -- COMMAND ----------
 
@@ -74,6 +176,7 @@
 -- COMMAND ----------
 
 -- TBD
+(select ttr.token_address,count(*) from g10_db.token_transfers ttr group by ttr.token_address order by count(*) desc limit 100;
 
 -- COMMAND ----------
 
@@ -84,6 +187,7 @@
 -- COMMAND ----------
 
 -- TBD
+select erc20_tr.to_address,count(*) from g10_db.erc20_token_transfers erc20_tr group by erc20_tr.to_address having count(*)=1;
 
 -- COMMAND ----------
 
@@ -94,6 +198,12 @@
 -- COMMAND ----------
 
 -- TBD
+select * from g10_db.transactions where block_number in (select block_number from g10_db.transactions group by block_number having count(*)>1) order by gas_price;
+
+-- COMMAND ----------
+
+
+0xefd8af0b52f0fa6522ea58222af52ccbec9ab55460c9e6c3c553569e2e2dc8be
 
 -- COMMAND ----------
 
@@ -114,6 +224,7 @@
 -- COMMAND ----------
 
 -- TBD
+select sum(value) from g10_db.transactions;
 
 -- COMMAND ----------
 
@@ -123,6 +234,7 @@
 -- COMMAND ----------
 
 -- TBD
+select sum(gas) from g10_db.transactions;
 
 -- COMMAND ----------
 
@@ -132,6 +244,7 @@
 -- COMMAND ----------
 
 -- TBD
+select max(value) from g10_db.erc20_token_transfers;
 
 -- COMMAND ----------
 

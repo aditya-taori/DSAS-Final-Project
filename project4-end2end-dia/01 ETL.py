@@ -41,7 +41,10 @@ spark.conf.set('start.date',start_date)
 
 # COMMAND ----------
 
+#json_file = "/dbfs/mnt/dscc202-datasets/ethereumetl/blocks.json"
+blocks_df = spark.sql("select * from ethereumetl.blocks")
 
+display(blocks_df.select("*"))
 
 # COMMAND ----------
 
