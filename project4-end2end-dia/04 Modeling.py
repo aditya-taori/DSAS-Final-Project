@@ -23,16 +23,14 @@ print(wallet_address,start_date)
 
 # COMMAND ----------
 
-x = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().getOrElse(None)
+from pyspark.ml.recommendation import ALS
+from pyspark.ml.evaluation import RegressionEvaluator
+from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
+from pyspark.sql import functions as F
+from mlflow.tracking import MlflowClient
+from mlflow.types.schema import Schema, ColSpec
+from mlflow.models.signature import ModelSignature
 
-
-# COMMAND ----------
-
-#
-#exp_id
-import os
-os.environ['MLFLOW_EXPERIMENT_NAME'] = x
-exp_id = mlflow.create_experiment(x)
 
 # COMMAND ----------
 
@@ -41,213 +39,105 @@ exp_id = mlflow.create_experiment(x)
 
 # COMMAND ----------
 
-erc20_token_subset = spark.sql("select * from g10_db.erc20_token_transfers order by block_number limit 10000")
-erc20_token_subset.head(5)
-erc20_token_subset.cache()
+modelName = 'G10_model'
 
-# COMMAND ----------
+# create an MLflow experiment for this model
+MY_EXPERIMENT = "/Users/" + dbutils.notebook.entry_point.getDbutils().notebook().getContext().userName().get() + "/G10_experiment/" 
+name = mlflow.get_experiment_by_name(MY_EXPERIMENT)
 
-erc20_token_subset.show(5)
-
-# COMMAND ----------
-
-erc20_token_subset.count()
-
-
-# COMMAND ----------
-
-#erc20_token_subset.select("from_address").where(col("from_address").isNull()).count()
-erc20_token_subset.select("token_address").where(col("token_address").isNull()).count()
-
-# COMMAND ----------
-
-tokens_counts = erc20_token_subset.groupby('token_address').count()
-display(tokens_counts)
-tokens_counts = tokens_counts.select("*").withColumn("token_ids", monotonically_increasing_id())
-display(tokens_counts)
-
-# COMMAND ----------
-
-from_address_counts = erc20_token_subset.groupby('from_address').count()
-display(from_address_counts)
-from_address_counts = from_address_counts.select("*").withColumn("user_id", monotonically_increasing_id())
-display(from_address_counts)
-
-# COMMAND ----------
-
-erc20_token_subset = erc20_token_subset.join(from_address_counts,erc20_token_subset.from_address==from_address_counts.from_address)
-display(erc20_token_subset)
-erc20_token_subset = erc20_token_subset.join(tokens_counts,erc20_token_subset.token_address==tokens_counts.token_address)
-display(erc20_token_subset)
-
-# COMMAND ----------
-
-triplet_df = (erc20_token_subset.groupBy("user_id","token_ids").count())
-
-# COMMAND ----------
-
-display(triplet_df)
-
-# COMMAND ----------
+# split the data set into train, validation and test anc cache them
+# We'll hold out 60% for training, 20% of our data for validation, and leave 20% for testing
+triplet_subset = spark.table("g10_db.silver_tokenmatrix").select(col('token_id').alias("tokenID"),col('user_id').alias("userID"),"#_transfers")
+token_meta = spark.table("g10_db.silvertokenmetadata")
 
 seed = 42
-(split_60_df, split_a_20_df, split_b_20_df) = triplet_df.randomSplit([0.6, 0.2, 0.2], seed = seed)
+(split_60_df, split_a_20_df, split_b_20_df) = triplet_subset.randomSplit([0.6, 0.2, 0.2], seed = seed)
 
 # Let's cache these datasets for performance
 training_df = split_60_df.cache()
 validation_df = split_a_20_df.cache()
 test_df = split_b_20_df.cache()
 
-print('Training: {0}, validation: {1}, test: {2}\n'.format(
-  training_df.count(), validation_df.count(), test_df.count())
-)
+#print('Training: {0}, validation: {1}, test: {2}\n'.format(
+#  training_df.count(), validation_df.count(), test_df.count())
+#)
 training_df.show(3)
 validation_df.show(3)
 test_df.show(3)
 
-# COMMAND ----------
-
-#Number of plays needs to be double type, not integers
-validation_df = validation_df.withColumn("count", validation_df["count"].cast(DoubleType()))
-validation_df.show(10)
-
-#Number of plays needs to be double type, not integers
-training_df = training_df.withColumn("count", training_df["count"].cast(DoubleType()))
-training_df.show(10)
-
-#Number of plays needs to be double type, not integers
-test_df = test_df.withColumn("count", test_df["count"].cast(DoubleType()))
-test_df.show(10)
-
-# COMMAND ----------
-
-from pyspark.ml.recommendation import ALS
-from pyspark.ml.evaluation import RegressionEvaluator
-from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
-from pyspark.sql import functions as F
-from mlflow.tracking import MlflowClient
-
-
-# Let's initialize our ALS learner
 als = ALS()
 
 # Now set the parameters for the method
 als.setMaxIter(5)\
    .setSeed(seed)\
-   .setItemCol("token_ids")\
-   .setRatingCol("count")\
-   .setUserCol("user_id")\
+   .setItemCol("tokenID")\
+   .setRatingCol("#_transfers")\
+   .setUserCol("userID")\
    .setColdStartStrategy("drop")
 
 # Now let's compute an evaluation metric for our test dataset
 # We Create an RMSE evaluator using the label and predicted columns
-reg_eval = RegressionEvaluator(predictionCol="prediction", labelCol="count", metricName="rmse")
-
-grid = ParamGridBuilder() \
-  .addGrid(als.maxIter, [10]) \
-  .addGrid(als.regParam, [0.15, 0.2, 0.25]) \
-  .addGrid(als.rank, [4, 8, 12, 16]) \
-  .build()
-
-# Create a cross validator, using the pipeline, evaluator, and parameter grid you created in previous steps.
-cv = CrossValidator(estimator=als, evaluator=reg_eval, estimatorParamMaps=grid, numFolds=3)
+reg_eval = RegressionEvaluator(predictionCol="prediction", labelCol="#_transfers", metricName="rmse")
 
 
+input_schema = Schema([
+  ColSpec("integer", "tokenID"),
+  ColSpec("integer", "userID"),
+])
+output_schema = Schema([ColSpec("double")])
+signature = ModelSignature(inputs=input_schema, outputs=output_schema)
 
-tolerance = 0.03
-ranks = [4, 8, 12, 16]
-regParams = [0.15, 0.2, 0.25]
-errors = [[0]*len(ranks)]*len(regParams)
-models = [[0]*len(ranks)]*len(regParams)
-err = 0
-min_error = float('inf')
-best_rank = -1
-i = 0
-for regParam in regParams:
-    j = 0
-    for rank in ranks:
-    # Set the rank here:
-        als.setParams(rank = rank, regParam = regParam)
-        # Create the model with these parameters.
-        model = als.fit(training_df)
-        # Run the model to create a prediction. Predict against the validation_df.
-        predict_df = model.transform(validation_df)
+with mlflow.start_run(run_name="Basic ALS Experiment_v3") as run:
+    mlflow.set_tags({"group": 'G10', "class": "DSCC202-402"})
+    mlflow.log_params({"user_rating_training_data_version": training_df,"user_rating_testing_data_version": test_df,"rank":12,"regParam":0.25})
 
-        # Remove NaN values from prediction (due to SPARK-14489)
-        predicted_plays_df = predict_df.filter(predict_df.prediction != float('nan'))
-        predicted_plays_df = predicted_plays_df.withColumn("prediction", F.abs(F.round(predicted_plays_df["prediction"],0)))
-        # Run the previously created RMSE evaluator, reg_eval, on the predicted_ratings_df DataFrame
-        error = reg_eval.evaluate(predicted_plays_df)
-        errors[i][j] = error
-        models[i][j] = model
-        print( 'For rank %s, regularization parameter %s the RMSE is %s' % (rank, regParam, error))
-        if error < min_error:
-            min_error = error
-            best_params = [i,j]
-        j += 1
-    i += 1
+    als.setParams(rank = 12, regParam = 0.25)
+    # Create the model with these parameters.
+    model = als.fit(training_df)
+    # Run the model to create a prediction. Predict against the validation_df.
+    predict_df = model.transform(validation_df)
 
-als.setRegParam(regParams[best_params[0]])
-als.setRank(ranks[best_params[1]])
-print( 'The best model was trained with regularization parameter %s' % regParams[best_params[0]])
-print( 'The best model was trained with rank %s' % ranks[best_params[1]])
-my_model = models[best_params[0]][best_params[1]]
+    # Remove NaN values from prediction (due to SPARK-14489)
+    predicted_plays_df = predict_df.filter(predict_df.prediction != float('nan'))
+    predicted_plays_df = predicted_plays_df.withColumn("prediction", F.abs(F.round(predicted_plays_df["prediction"],0)))
+    
+    training_RMSE = reg_eval.evaluate(predict_df)
 
-# COMMAND ----------
 
-predicted_plays_df.show(10)
+    
+    #mlflow.spark.log_model(spark_model=cvModel.bestModel, signature = signature,
+    #                         artifact_path='als-model', registered_model_name=self.modelName)
 
-# COMMAND ----------
+    mlflow.spark.log_model(spark_model=model, artifact_path='als-best-model',signature = signature,registered_model_name=modelName)
+    mlflow.log_metric("training_rmse", training_RMSE)
+    runID = run.info.run_uuid
+    experimentID = run.info.experiment_id
 
-test_df = test_df.withColumn("count", test_df["count"].cast(DoubleType()))
-predict_df = my_model.transform(test_df)
+    print(f"Inside MLflow Run with run_id `{runID}` and experiment_id `{experimentID}`")
 
-# Remove NaN values from prediction (due to SPARK-14489)
-predicted_test_df = predict_df.filter(predict_df.prediction != float('nan'))
-
-# Round floats to whole numbers
-predicted_test_df = predicted_test_df.withColumn("prediction", F.abs(F.round(predicted_test_df["prediction"],0)))
-# Run the previously created RMSE evaluator, reg_eval, on the predicted_test_df DataFrame
-test_RMSE = reg_eval.evaluate(predicted_test_df)
-
-print('The model had a RMSE on the test set of {0}'.format(test_RMSE))
+client = MlflowClient()
+model_versions = []
+    # Transition this model to staging and archive the current staging model if there is one
+for mv in client.search_model_versions(f"name='{modelName}'"):
+    model_versions.append(dict(mv)['version'])
+    #print(model_versions)
+    if dict(mv)['current_stage'] == 'Staging':
+        print("Archiving: {}".format(dict(mv)))
+        # Archive the currently staged model
+        client.transition_model_version_stage(
+            name=modelName,
+            version=dict(mv)['version'],
+            stage="Archived"
+        )
+client.transition_model_version_stage(
+    name=modelName,
+    version=model_versions[0],  # this model (current build)
+    stage="Staging"
+)
 
 # COMMAND ----------
 
-UserID = 125
-used_tokens = erc20_token_subset.filter(erc20_token_subset.user_id == UserID) \
-                                          .select('token_ids') \
-                                          
-# generate list of listened songs
-used_tokens_list = []
-for tokens in used_tokens.collect():
-    used_tokens_list.append(tokens['token_ids'])
-
-print('Tokens User has used :')
-used_tokens.select('token_ids').show()
-
-# generate dataframe of unlistened songs
-unused_tokens = erc20_token_subset.filter(~ erc20_token_subset['token_ids'].isin(used_tokens_list)) \
-                                            .select('token_ids').withColumn('user_id', F.lit(UserID)).distinct()
-
-# feed unlistened songs into model
-predicted_tokens = my_model.transform(unused_tokens)
-
-# remove NaNs
-predicted_tokens = predicted_tokens.filter(predicted_tokens['prediction'] != float('nan'))
-
-# print output
-print('Predicted Songs:')
-predicted_tokens.join(erc20_token_subset, 'user_id') \
-                 .join(erc20_token_subset, 'token_ids') \
-                 .select('spark_catalog.g10_db.erc20_token_transfers.from_address', 'spark_catalog.g10_db.erc20_token_transfers.token_address', 'prediction') \
-                 .distinct() \
-                 .orderBy('prediction', ascending = False) \
-                 .show(10)
-
-# COMMAND ----------
-
-erc20_token_subset.unpersist()
+triplet_subset = spark.table("g10_db.silver_tokenmatrix")
 
 # COMMAND ----------
 
