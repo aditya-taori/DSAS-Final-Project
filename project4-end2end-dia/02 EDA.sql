@@ -23,6 +23,12 @@
 
 -- COMMAND ----------
 
+-- MAGIC %python 
+-- MAGIC token_transfer = spark.table("g10_db.silver_tokenmatrix")
+-- MAGIC token_transfer.show(3)
+
+-- COMMAND ----------
+
 -- MAGIC %python
 -- MAGIC # Grab the global variables
 -- MAGIC wallet_address,start_date = Utils.create_widgets()
@@ -126,11 +132,11 @@ AS SELECT * FROM ethereumetl.transactions;
 
 CREATE OR REPLACE VIEW g10_db.erc20_token_transfers_limit_10000 
 COMMENT 'Copy of ERC 20 token transfers'
-AS select ttr.* from g10_db.token_transfers ttr inner join g10_db.tokens tok on (ttr.token_address=tok.address) limit 10000;
+AS select ttr.token_address,ttr.from_address from g10_db.token_transfers ttr inner join g10_db.tokens tok on (ttr.token_address=tok.address) limit 10;
 
 -- COMMAND ----------
 
-select * from g10_db.erc20_token_transfers_limit_10000;
+select ttr.token_address,ttr.from_address from g10_db.token_transfers ttr inner join g10_db.tokens tok on (ttr.token_address=tok.address) limit 10;
 
 -- COMMAND ----------
 
@@ -141,7 +147,7 @@ select * from g10_db.erc20_token_transfers_limit_10000;
 
 -- TBD
 select tr.* from 
-   (select token_address,block_number from g10_db.token_transfers) tr inner join 
+   (select token_address,from_address,block_number from g10_db.token_transfers) tr inner join 
       (select * from g10_db.tokens) tok on (tr.token_address=tok.address) order by block_number;
 
 -- COMMAND ----------
