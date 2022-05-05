@@ -41,6 +41,139 @@ spark.conf.set('start.date',start_date)
 
 # COMMAND ----------
 
+#Set shuffle partitions:
+sqlContext.setConf('spark.sql.shuffle.partitions', 'auto')
+
+# COMMAND ----------
+
+#Blocks contain transactions and some important data such as previous hash that ensures immutability and security in the blockchain network. Each block stores a previous hash sequentially so it is almost infeasible to reverse and tamper data.
+#nonce is a property of transaction originating address
+#gas refers to the cost necessary to perform a transaction on the network
+blocks = spark.table("ethereumetl.blocks")
+#contracts = spark.table("ethereumetl.contracts")
+#logs = spark.table("ethereumetl.logs")
+#receipts = spark.table("ethereumetl.receipts")
+#blocks_date = spark.table("g10_db.blocks_date")
+#contracts = spark.table("ethereumetl.contracts")
+#logs = spark.table("ethereumetl.logs")
+#receipts = spark.table("ethereumetl.receipts")
+silver_contracts = spark.table("ethereumetl.silver_contracts")
+token_prices_usd = spark.table("g10_db.token_prices_usd")
+token_transfers = spark.table("g10_db.token_transfers")
+tokens = spark.table("g10_db.tokens")
+transactions = spark.table("g10_db.transactions")
+erc20_token_transfers = spark.table("g10_db.erc20_token_transfers")
+
+
+# COMMAND ----------
+
+from pyspark.sql import Row
+from pyspark.ml.feature import StringIndexer
+token_prices_usd_unique = token_prices_usd.dropDuplicates(["contract_address"]) #Drop repeat contract address to get unique tokens
+token_prices_usd_unique = token_prices_usd_unique.filter(col("price_usd").isNotNull() & col("contract_address").isNotNull()) #Drop null price and address values
+token_prices_usd_unique = token_prices_usd_unique.select(["name","contract_address","price_usd","links","image"]) #Select necessary metadata
+token_prices_usd_unique = token_prices_usd_unique.withColumn("token_address",col("contract_address")).drop("contract_address") #Rename to token_address
+#Index the contract_address column
+stringIndexer = StringIndexer(inputCol="token_address", outputCol="token_address_id") #Use string indexer to assign integer values to the token IDs
+model = stringIndexer.fit(token_prices_usd_unique)
+token_prices_usd_unique = model.transform(token_prices_usd_unique)
+token_prices_usd_unique = token_prices_usd_unique.withColumn("token_id", col("token_address_id").cast("int")).drop("token_address_id")
+#Now we have a unique metadata table
+
+# COMMAND ----------
+
+#Select records only after the start date
+blocks = (blocks
+          .withColumn("transformed_timestamp",to_timestamp(col("timestamp")))
+          .withColumn("block_number",col("number"))
+          .select("block_number","transformed_timestamp")
+         )
+blocks = blocks.filter(blocks["transformed_timestamp"] >= (lit(start_date)))
+
+erc20_token_transfers = erc20_token_transfers.join(blocks, "block_number","inner")
+
+# COMMAND ----------
+
+#Combine the pricing information with the token transfer information, left join by token transfers
+#An inner join should exclude tokens in the transfer table that do not have pricing information, since we exluded that in the pricing table.
+erc20_token_transfers = erc20_token_transfers.select(["token_address","from_address","value"])
+silverTokenTransfers = erc20_token_transfers.join(token_prices_usd_unique, 'token_address', 'inner')
+#Now multiply value*price_usd to normalize transfer values to USD
+#silverTokenTransfers = silverTokenTransfers.withColumn("token_USD_value_transferred",col("value")*col("price_usd"))
+silverTokenTransfers.printSchema()
+#display(silverTokenTransfers)
+
+
+# COMMAND ----------
+
+from pyspark.sql.functions import monotonically_increasing_id 
+user_mapping = silverTokenTransfers.select("from_address").dropDuplicates().withColumn("user_id",monotonically_increasing_id().cast("int"))
+user_mapping.cache()
+user_mapping.count()
+
+# COMMAND ----------
+
+#Now groupby user_id and token_id to create user_id, token_id, # of transfers matrix to feed into Collab Filtering 
+#from pyspark.sql.functions import monotonically_increasing_id 
+silverTokenMatrix = silverTokenTransfers.select("from_address","token_id").groupby("from_address","token_id").count().withColumnRenamed("count","#_transfers_long").withColumn("#_transfers",col("#_transfers_long").cast("int")).drop("#_transfers_long")
+
+silverTokenMatrix = silverTokenMatrix.join(user_mapping, "from_address")
+
+#silverTokenMatrix = silverTokenMatrix.withColumn("user_id",monotonically_increasing_id().cast("int")) #Since the user_addresses are now unique (grouped and aggregated), just assign integers to them
+silverTokenMatrix = silverTokenMatrix.select("user_id","token_id","#_transfers") #Select just the triplet values. Our implicit rating system is #_transfers for each token
+silverTokenMatrix.schema['user_id'].nullable = True
+silverTokenMatrix.schema['token_id'].nullable = True
+silverTokenMatrix.schema['#_transfers'].nullable = True
+silverTokenMatrix.cache
+silverTokenMatrix.count()
+
+# COMMAND ----------
+
+from pyspark.sql.types import * 
+
+#Manurally define the schema we want for the silver matrix:
+expected_schema = StructType([StructField("user_id",IntegerType(), True),
+                              StructField("token_id",IntegerType(), True),
+                              StructField("#_transfers",IntegerType(),True)])
+#Assert that it is correct
+assert silverTokenMatrix.schema == expected_schema, "Schema Incorrect"
+print("Assertion passed.")
+
+
+
+
+# COMMAND ----------
+
+#Repeat with the silver metadata table
+from pyspark.sql.types import _parse_datatype_string
+
+metadata_expected_schema = "name STRING, price_usd DOUBLE, links STRING, image STRING, token_address STRING, token_id INTEGER"
+assert token_prices_usd_unique.schema == _parse_datatype_string(metadata_expected_schema), "Schema Incorrect"
+print("Assertion passed.")
+
+# COMMAND ----------
+
+#Write out the Triplet Matrix
+silverTokenMatrix.write.format("delta").option("mergeSchema", "true").mode("overwrite").partitionBy("token_id").saveAsTable("g10_db.silver_TokenMatrix")
+
+# COMMAND ----------
+
+#Write out the metadata
+token_prices_usd_unique.write.format("delta").mode("overwrite").partitionBy("token_id").saveAsTable("g10_db.silverTokenMetaData")
+
+# COMMAND ----------
+
+#Write out user_id mappings from from_address
+user_mapping.write.format("delta").mode("overwrite").saveAsTable("g10_db.silver_userid_mapping")
+#OPTIMIZE silver_TokenMatrix ZORDER BY (user_id)
+#VACUUM silver_tokenmatrix retain 169 hours dry run
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
 
 
 # COMMAND ----------
