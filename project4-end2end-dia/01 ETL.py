@@ -41,6 +41,7 @@ spark.conf.set('start.date',start_date)
 
 # COMMAND ----------
 
+01-ETL
 #Set shuffle partitions:
 sqlContext.setConf('spark.sql.shuffle.partitions', 'auto')
 
