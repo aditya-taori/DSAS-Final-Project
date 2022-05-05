@@ -92,24 +92,11 @@ prod_model
 
 # COMMAND ----------
 
-versions_list = client.search_model_versions(f"name='{modelName}'")
-for i in versions_list:
-    i = dict(i)
-    c_stage = i["current_stage"]
-    print(c_stage)
-    if c_stage=="Production":
-        model_version = i["version"]
-        print(model_version)
-        break
+
 
 # COMMAND ----------
 
-import mlflow.pyfunc
 
-model_version_uri = "models:/{model_name}/{model_version}".format(model_name=modelName,model_version=model_version)
-
-print("Loading registered model version from URI: '{model_uri}'".format(model_uri=model_version_uri))
-model_version_1 = mlflow.pyfunc.load_model(model_version_uri)
 
 # COMMAND ----------
 

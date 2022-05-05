@@ -21,6 +21,7 @@ print(wallet_address,start_date)
 # COMMAND ----------
 
 from pyspark.ml.evaluation import RegressionEvaluator
+from pyspark.sql import functions as F
 
 # COMMAND ----------
 
@@ -46,17 +47,12 @@ except:
 
 # COMMAND ----------
 
-runs = client.search_runs(experimentID, order_by=["attributes.start_time desc"], max_results=1)
+runs = mlflow_client.search_runs(experimentID, order_by=["attributes.start_time desc"], max_results=1)
 runs[0].data.metrics
 
 # COMMAND ----------
 
 runs[0].info.run_id
-
-# COMMAND ----------
-
-artifactURI = 'runs:/'+runs[0].info.run_id+"/random-forest-model"
-test_df
 
 # COMMAND ----------
 
@@ -140,6 +136,11 @@ print(staging_rmse)
 
 if prod_rmse>staging_rmse:
     deploy_prod_yn = 1
+
+# COMMAND ----------
+
+print(deploy_prod_yn)
+deploy_prod_yn = 1
 
 # COMMAND ----------
 
