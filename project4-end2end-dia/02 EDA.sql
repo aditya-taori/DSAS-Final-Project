@@ -214,6 +214,7 @@ select * from g10_db.transactions where block_number in (select block_number fro
 -- COMMAND ----------
 
 -- TBD
+select MAX(transaction_count)/15 from blocks
 
 -- COMMAND ----------
 
@@ -254,6 +255,11 @@ select max(value) from g10_db.erc20_token_transfers;
 -- COMMAND ----------
 
 -- TBD
+select token_address, date(cast(blocks.timestamp as TIMESTAMP)) as forDate,
+sum(case when from_address = token_address then value*-1 else value end)
+from token_transfers inner join blocks on token_transfers.block_number = blocks.number
+where from_address = token_address or to_address = token_address 
+group by forDate, token_address
 
 -- COMMAND ----------
 
@@ -263,6 +269,7 @@ select max(value) from g10_db.erc20_token_transfers;
 -- COMMAND ----------
 
 -- TBD
+select sum(transaction_count) as transaction_count, cast(timestamp as TIMESTAMP) from blocks group by cast(timestamp as TIMESTAMP)
 
 -- COMMAND ----------
 
@@ -273,7 +280,9 @@ select max(value) from g10_db.erc20_token_transfers;
 -- COMMAND ----------
 
 -- TBD
-
+select sum(transfer_count) as tranfer_count, cast(timestamp as TIMESTAMP) 
+from blocks join (select block_number, count(transaction_hash) as transfer_count from token_transfers group by block_number) b on blocks.number=b.block_number
+group by cast(timestamp as TIMESTAMP)
 
 -- COMMAND ----------
 
