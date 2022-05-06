@@ -113,25 +113,24 @@ with mlflow.start_run(experiment_id=experimentID,run_name="Basic ALS Experiment_
     mlflow.set_tags({"group": 'G10', "class": "DSCC202-402"})
     mlflow.log_params({"user_rating_training_data_version": training_df,"user_rating_testing_data_version": test_df,"rank":12,"regParam":0.25})
 
-    als.setParams(rank = 12, regParam = 0.30)
-    # Create the model with these parameters.
-    model = als.fit(training_df)
-    # Run the model to create a prediction. Predict against the validation_df.
-    predict_df = model.transform(validation_df)
+    grid = ParamGridBuilder() \
+      .addGrid(als.maxIter, [10]) \
+      .addGrid(als.regParam, [0.15]) \
+      .addGrid(als.rank, [4]) \
+      .build()
 
-    # Remove NaN values from prediction (due to SPARK-14489)
-    predicted_plays_df = predict_df.filter(predict_df.prediction != float('nan'))
-    predicted_plays_df = predicted_plays_df.withColumn("prediction", F.abs(F.round(predicted_plays_df["prediction"],0)))
+    # Create a cross validator, using the pipeline, evaluator, and parameter grid you created in previous steps.
+    cv = CrossValidator(estimator=als, evaluator=reg_eval, estimatorParamMaps=grid, numFolds=3)
+
+    # Run the cross validation on the training dataset. The cv.fit() call returns the best model it found.
+    cvModel = cv.fit(training_df)
     
-    training_RMSE = reg_eval.evaluate(predict_df)
+    validation_metric = reg_eval.evaluate(cvModel.transform(validation_df))
 
+    mlflow.log_metric('test_' + reg_eval.getMetricName(), validation_metric) 
+ 
+    mlflow.spark.log_model(spark_model=cvModel, artifact_path='als-best-model',signature = signature,registered_model_name=modelName)
 
-    
-    #mlflow.spark.log_model(spark_model=cvModel.bestModel, signature = signature,
-    #                         artifact_path='als-model', registered_model_name=self.modelName)
-
-    mlflow.spark.log_model(spark_model=model, artifact_path='als-best-model',signature = signature,registered_model_name=modelName)
-    mlflow.log_metric("training_rmse", training_RMSE)
     runID = run.info.run_uuid
     experimentID = run.info.experiment_id
 
