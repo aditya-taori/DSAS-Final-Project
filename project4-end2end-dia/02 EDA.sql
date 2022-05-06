@@ -257,9 +257,10 @@ select max(value) from g10_db.erc20_token_transfers;
 -- TBD
 select token_address, date(cast(blocks.timestamp as TIMESTAMP)) as forDate,
 sum(case when from_address = token_address then value*-1 else value end)
-from token_transfers inner join blocks on token_transfers.block_number = blocks.number
+from token_transfers join blocks on token_transfers.block_number = blocks.number
 where from_address = token_address or to_address = token_address 
 group by forDate, token_address
+order by forDate
 
 -- COMMAND ----------
 
