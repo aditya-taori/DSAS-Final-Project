@@ -75,8 +75,17 @@ user_id_mapping.count()
 
 # COMMAND ----------
 
-e = user_id_mapping.select("user_id").where(col("from_address")==wallet_address) 
-u_id = e.toPandas().user_id.iloc[0]
+user_id_mapping.select("from_address").toPandas().iloc[0]
+
+# COMMAND ----------
+
+e = user_id_mapping.select("user_id").where(col("from_address")==wallet_address)
+e = e.toPandas()
+user_id_exist = 0
+if e.shape[0]>0:
+    u_id = e.toPandas().user_id.iloc[0]
+    user_id_exist = 1
+    
 
 # COMMAND ----------
 
@@ -92,35 +101,31 @@ prod_model
 
 # COMMAND ----------
 
-
-
-# COMMAND ----------
-
-
+if user_id_exist==1:
+    prod_object = ALS_prediction(prod_model)
+    recommendaton_out = prod_object.prediction(model_input = int(u_id))
 
 # COMMAND ----------
 
-prod_object = ALS_prediction(prod_model)
-recommendaton_out = prod_object.prediction(model_input = int(u_id))
+if user_id_exist==1:
+    body_text = "<h3>Recommend Tokens for User address</h3> <p>"+wallet_address+"</p>" 
 
-# COMMAND ----------
+    comp_table_text = "<table> "
+    reco_out = recommendaton_out.toPandas()
+    for i in range(5):
+        img = reco_out["image"].iloc[i]
+        print(img)
+        token_name = reco_out["name"].iloc[i]
+        token_link = reco_out["links"].iloc[i]
+        token_address = reco_out["token_address"].iloc[i]
+        ether_link = "https://etherscan.io/token/"+token_address
+        table_text = "<tr> <td><img src='"+img+"'></td> <td>"+ token_name+"</td> <td><a href='"+ether_link+"'>Link</td> </tr>"
+        comp_table_text = comp_table_text + table_text
 
-body_text = "<h3>Recommend Tokens for User address</h3> <p>"+wallet_address+"</p>" 
-
-comp_table_text = "<table> "
-reco_out = recommendaton_out.toPandas()
-for i in range(5):
-    img = reco_out["image"].iloc[i]
-    print(img)
-    token_name = reco_out["name"].iloc[i]
-    token_link = reco_out["links"].iloc[i]
-    token_address = reco_out["token_address"].iloc[i]
-    ether_link = "https://etherscan.io/token/"+token_address
-    table_text = "<tr> <td><img src='"+img+"'></td> <td>"+ token_name+"</td> <td><a href='"+ether_link+"'>Link</td> </tr>"
-    comp_table_text = comp_table_text + table_text
-
-comp_table_text = comp_table_text + "</table>"
-
+    comp_table_text = comp_table_text + "</table>"
+else: 
+    body_text = "<h3>Recommend Tokens for User address</h3> <p>"+wallet_address+"</p>" 
+    comp_table_text= "<p>Wallet Address does not exist in a time range</p>"
 html_text = body_text + " "+ comp_table_text
 
 print(html_text)

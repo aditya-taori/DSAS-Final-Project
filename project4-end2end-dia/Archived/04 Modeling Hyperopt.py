@@ -9,11 +9,11 @@
 
 # COMMAND ----------
 
-# MAGIC %run ./includes/utilities
+# MAGIC %run ../includes/utilities
 
 # COMMAND ----------
 
-# MAGIC %run ./includes/configuration
+# MAGIC %run ../includes/configuration
 
 # COMMAND ----------
 
@@ -49,6 +49,139 @@ except:
     mlflow.set_experiment(MY_EXPERIMENT)
     experimentID = mlflow_client.get_experiment_by_name(name=MY_EXPERIMENT).experiment_id
 experimentID
+
+# COMMAND ----------
+
+try:
+    import mlflow.pyspark.ml
+    mlflow.pyspark.ml.autolog()
+except:
+    print(f"Your version of MLflow ({mlflow.__version__}) does not support pyspark.ml for autologging. To use autologging, upgrade your MLflow client version or use Databricks Runtime for ML 8.3 or above.")
+
+# COMMAND ----------
+
+# split the data set into train, validation and test anc cache them
+# We'll hold out 60% for training, 20% of our data for validation, and leave 20% for testing
+triplet_subset = spark.table("g10_db.silver_tokenmatrix").select(col('token_id').alias("tokenID"),col('user_id').alias("userID"),"#_transfers")
+token_meta = spark.table("g10_db.silvertokenmetadata")
+
+triplet_subset = triplet_subset.groupBy(["tokenID","userID"]).sum("#_transfers").alias("#_transfers")
+triplet_subset = triplet_subset.withColumnRenamed("sum(#_transfers)","#_transfers")
+
+seed = 42
+(split_60_df, split_a_20_df, split_b_20_df) = triplet_subset.randomSplit([0.6, 0.2, 0.2], seed = seed)
+
+# Let's cache these datasets for performance
+training_df = split_60_df.cache()
+validation_df = split_a_20_df.cache()
+test_df = split_b_20_df.cache()
+
+#print('Training: {0}, validation: {1}, test: {2}\n'.format(
+#  training_df.count(), validation_df.count(), test_df.count())
+#)
+training_df.show(3)
+validation_df.show(3)
+test_df.show(3)
+
+als = ALS()
+
+als.setMaxIter(5)\
+   .setSeed(seed)\
+   .setItemCol("tokenID")\
+   .setRatingCol("#_transfers")\
+   .setUserCol("userID")\
+   .setColdStartStrategy("drop")
+
+# COMMAND ----------
+
+def train_ALS(maxIterations, regParams,rank ):
+  '''
+  This train() function:
+   - takes hyperparameters as inputs (for tuning later)
+   - returns the F1 score on the validation dataset
+ 
+  Wrapping code as a function makes it easier to reuse the code later with Hyperopt.
+  '''
+  # Use MLflow to track training.
+  # Specify "nested=True" since this single model will be logged as a child run of Hyperopt's run.
+  with mlflow.start_run(experiment_id=experimentID,run_name = "ALS Hyperopt",nested=True):
+    
+    als.setParams(rank = rank, regParam = regParams,maxIter = maxIterations)
+    # Create the model with these parameters.
+    model = als.fit(training_df)
+ 
+    # Define an evaluation metric and evaluate the model on the validation dataset.
+    reg_eval = RegressionEvaluator(predictionCol="prediction", labelCol="#_transfers", metricName="rmse")
+    predict_df = model.transform(validation_df)
+
+    # Remove NaN values from prediction (due to SPARK-14489)
+    predicted_plays_df = predict_df.filter(predict_df.prediction != float('nan'))
+    predicted_plays_df = predicted_plays_df.withColumn("prediction", F.abs(F.round(predicted_plays_df["prediction"],0)))
+    
+    training_RMSE = reg_eval.evaluate(predict_df)
+    mlflow.log_metric("training_rmse", training_RMSE)
+ 
+  return model, training_RMSE
+
+# COMMAND ----------
+
+initial_model, val_metric = train_ALS(maxIterations=2, regParams=0.25,rank = 8)
+print(f"The trained decision tree achieved an F1 score of {val_metric} on the validation data")
+
+# COMMAND ----------
+
+from hyperopt import fmin, tpe, hp, Trials, STATUS_OK
+ 
+def train_with_hyperopt(params):
+    """
+    An example train method that calls into MLlib.
+    This method is passed to hyperopt.fmin().
+
+    :param params: hyperparameters as a dict. Its structure is consistent with how search space is defined. See below.
+    :return: dict with fields 'loss' (scalar loss) and 'status' (success/failure status of run)
+    """
+    # For integer parameters, make sure to convert them to int type if Hyperopt is searching over a continuous range of values.
+    maxIter = int(params['maxIterations'])
+    regp = int(params['regParams'])
+    rank_val = int(params['rank'])
+
+    model, rmse = train_ALS(maxIter,regp, rank_val)
+
+    # Hyperopt expects you to return a loss (for which lower is better), so take the negative of the f1_score (for which higher is better).
+    loss =rmse 
+    return {'loss': loss, 'status': STATUS_OK}
+
+# COMMAND ----------
+
+import numpy as np
+space = {
+  'maxIterations': hp.uniform('maxIterations', 2,3),
+  'regParams': hp.uniform('regParams', 0.20,0.25),
+  'rank':hp.uniform('rank', 4,8)  
+}
+
+# COMMAND ----------
+
+algo=tpe.suggest
+ 
+with mlflow.start_run():
+    best_params = fmin(
+    fn=train_with_hyperopt,
+    space=space,
+    algo=algo,
+    max_evals=8
+    )
+
+# COMMAND ----------
+
+best_params
+
+# COMMAND ----------
+
+best_minInstancesPerNode = int(best_params['minInstancesPerNode'])
+best_maxBins = int(best_params['maxBins'])
+ 
+final_model, val_f1_score = train_ALS(best_minInstancesPerNode, best_maxBins)
 
 # COMMAND ----------
 

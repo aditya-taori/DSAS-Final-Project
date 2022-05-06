@@ -73,22 +73,27 @@ stage_model
 
 # COMMAND ----------
 
-prod_model = mlflow.spark.load_model('models:/'+modelName+'/Production')
-prod_model
+prod_model_exist = 0
+try:
+    prod_model = mlflow.spark.load_model('models:/'+modelName+'/Production')
+    prod_model_exist = 1
+except:
+    deploy_prod_yn = 1
 
 # COMMAND ----------
 
-versions_list = client.search_model_versions(f"name='{modelName}'")
-model_version = ""
-for i in versions_list:
-    i = dict(i)
-    c_stage = i["current_stage"]
-    print(c_stage)
-    if c_stage=="Production":
-        model_version = i["version"]
-        print(model_version)
-        break
-prod_version = model_version
+if prod_model_exist ==1:
+    versions_list = client.search_model_versions(f"name='{modelName}'")
+    model_version = ""
+    for i in versions_list:
+        i = dict(i)
+        c_stage = i["current_stage"]
+        print(c_stage)
+        if c_stage=="Production":
+            model_version = i["version"]
+            print(model_version)
+            break
+    prod_version = model_version
 
 # COMMAND ----------
 
@@ -115,47 +120,47 @@ reg_eval = RegressionEvaluator(predictionCol="prediction", labelCol="#_transfers
 
 # COMMAND ----------
 
-prod_predictions = prod_model.transform(test_input)
-staging_predictions = stage_model.transform(test_input)
+if prod_model_exist==1:
+    prod_predictions = prod_model.transform(test_input)
+    staging_predictions = stage_model.transform(test_input)
 
-prod_predictions = prod_predictions.filter(prod_predictions.prediction != float('nan'))
-prod_predictions = prod_predictions.withColumn("prediction", F.abs(F.round(prod_predictions["prediction"],0)))
+    prod_predictions = prod_predictions.filter(prod_predictions.prediction != float('nan'))
+    prod_predictions = prod_predictions.withColumn("prediction", F.abs(F.round(prod_predictions["prediction"],0)))
 
-staging_predictions = staging_predictions.filter(staging_predictions.prediction != float('nan'))
-staging_predictions = staging_predictions.withColumn("prediction", F.abs(F.round(staging_predictions["prediction"],0)))
+    staging_predictions = staging_predictions.filter(staging_predictions.prediction != float('nan'))
+    staging_predictions = staging_predictions.withColumn("prediction", F.abs(F.round(staging_predictions["prediction"],0)))
 
-prod_rmse = reg_eval.evaluate(prod_predictions)
-staging_rmse = reg_eval.evaluate(staging_predictions)
-
-# COMMAND ----------
-
-print(prod_rmse)
-print(staging_rmse)
-
-# COMMAND ----------
-
-if prod_rmse>staging_rmse:
-    deploy_prod_yn = 1
+    prod_rmse = reg_eval.evaluate(prod_predictions)
+    staging_rmse = reg_eval.evaluate(staging_predictions)
+    
+    if prod_rmse>staging_rmse:
+        deploy_prod_yn = 1
+    
 
 # COMMAND ----------
 
-print(deploy_prod_yn)
-deploy_prod_yn = 1
+staging_version
 
 # COMMAND ----------
 
-
-client.transition_model_version_stage(
+if staging_version =="1":
+    client.transition_model_version_stage(
+    name=modelName,
+    version=staging_version,  # this model (current build)
+    stage="Production"
+)
+else: 
+    client.transition_model_version_stage(
     name=modelName,
     version=staging_version,  # this model (current build)
     stage="Production"
 )
 
-client.transition_model_version_stage(
-    name=modelName,
-    version=str(int(staging_version)-1),  # this model (current build)
-    stage="Staging"
-)
+    client.transition_model_version_stage(
+        name=modelName,
+        version=str(int(staging_version)-1),  # this model (current build)
+        stage="Staging"
+    )
 
 # COMMAND ----------
 
