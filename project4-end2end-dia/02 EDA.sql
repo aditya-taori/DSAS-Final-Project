@@ -49,7 +49,7 @@
 -- COMMAND ----------
 
 --select min(transaction_index),max(transaction_index) from ethereumetl.transactions;
-select count(*) from ethereumetl.transactions;
+--select count(*) from ethereumetl.transactions;
 
 -- COMMAND ----------
 
@@ -59,7 +59,7 @@ select count(*) from ethereumetl.transactions;
 --select count(*) from ethereumetl.receipts;
 --select count(*) from ethereumetl.logs;
 --select count(*) from ethereumetl.contracts;
-select count(*) from ethereumetl.blocks;
+--select count(*) from ethereumetl.blocks;
 
 -- COMMAND ----------
 
